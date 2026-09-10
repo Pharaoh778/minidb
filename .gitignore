@@ -1,0 +1,29 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# ===== 虚拟环境 =====
+.venv/
+venv/
+env/
+
+# ===== 编辑器 / IDE =====
+.idea/
+# .vscode 只共享调试配置，个人设置不入库
+.vscode/*
+!.vscode/launch.json
+!.vscode/settings.json
+
+# ===== 运行时数据（程序自动生成，可随时重建） =====
+data/*.dat
+
+# ===== 课程资料（体积大，不入库） =====
+*.pdf
+
+# ===== 系统文件 =====
+.DS_Store
+Thumbs.db
+desktop.ini

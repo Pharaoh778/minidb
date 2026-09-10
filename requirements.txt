@@ -1,0 +1,13 @@
+# MiniDB —— 零第三方依赖
+#
+# 本项目全部使用 Python 标准库实现（argparse / logging / struct / json 等），
+# 不需要 pip install 任何包。
+#
+# 环境要求：Python >= 3.8
+#
+# 创建虚拟环境：
+#   python -m venv .venv
+#   .venv\Scripts\activate
+#
+# 运行：
+#   python main.py
