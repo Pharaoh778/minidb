@@ -12,10 +12,8 @@ env/
 
 # ===== 编辑器 / IDE =====
 .idea/
-# .vscode 只共享调试配置，个人设置不入库
-.vscode/*
-!.vscode/launch.json
-!.vscode/settings.json
+
+.vscode/
 
 # ===== 运行时数据（程序自动生成，可随时重建） =====
 data/*.dat
