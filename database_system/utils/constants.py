@@ -6,6 +6,9 @@ PAGE_SIZE = 4096          # 页大小（磁盘 I/O 的最小单位）
 PAGE_HEADER_SIZE = 20     # 页头大小
 SLOT_SIZE = 4             # 槽大小：记录偏移(2B) + 记录长度(2B)
 FILE_MAGIC = b"MDBF"      # 数据文件魔数
+OVERFLOW_MAGIC = b"MDBO"  # 溢出页文件魔数
+OVERFLOW_FILE_SUFFIX = ".overflow"
+STORAGE_LOG_FILENAME = "storage.log"
 
 # —— 页头字段偏移 ——
 PAGE_ID_OFFSET = 0        # int32  页号
@@ -20,6 +23,18 @@ FILE_MAGIC_OFFSET = 0       # 4B 魔数
 FILE_PAGE_COUNT_OFFSET = 4  # int32 文件总页数（含头页）
 FILE_FREE_LIST_OFFSET = 8   # int32 空闲页链表头
 FILE_LAST_PAGE_OFFSET = 12  # int32 最后一个数据页
+
+# —— 溢出页文件头/页布局 ——
+OVERFLOW_PAGE_COUNT_OFFSET = 4
+OVERFLOW_FREE_LIST_OFFSET = 8
+OVERFLOW_NEXT_RECORD_OFFSET = 12
+OVERFLOW_PAGE_ID_OFFSET = 0
+OVERFLOW_NEXT_PAGE_OFFSET = 4
+OVERFLOW_CHUNK_LENGTH_OFFSET = 8
+OVERFLOW_FLAGS_OFFSET = 10
+OVERFLOW_RECORD_ID_OFFSET = 12
+OVERFLOW_PAGE_HEADER_SIZE = 20
+OVERFLOW_RECORD_FLAG = 1
 
 # ============================ 数据类型 ============================
 TYPE_INT = "INT"
@@ -60,6 +75,15 @@ DEFAULT_DATA_DIR = "data"
 DEFAULT_POOL_SIZE = 64
 DEFAULT_STRATEGY = "LRU"   # LRU / FIFO
 SUPPORTED_STRATEGIES = ("LRU", "FIFO")
+# 预读和后台线程默认关闭，以保持小型/测试工作负载的确定性；可在 BufferPool
+# 构造时开启，也可在运行期调用 prefetch_pages/start_background_flush。
+DEFAULT_PREFETCH_PAGES = 0
+DEFAULT_BACKGROUND_FLUSH_INTERVAL = 0.0
+
+# ============================ B+ 树索引 ============================
+# order 表示内部节点最多拥有的子节点数；32 阶适合内存索引并减少树高。
+MIN_BPLUS_TREE_ORDER = 3
+DEFAULT_BPLUS_TREE_ORDER = 32
 
 # ============================ 关键字 ============================
 KEYWORDS = {
