@@ -14,6 +14,25 @@ from ..utils.constants import (
     TT_STRING,
 )
 
+# 语句起始关键字（语法错误时用于提示「期望集合」）
+STATEMENT_KEYWORDS = ("SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP",
+                      "SHOW", "DESC", "DESCRIBE", "EXPLAIN")
+
+# 表达式的合法起始符号（语法错误时用于提示「期望集合」）
+# 术语与课程 PPT 第 22 页的示例保持一致：expected: IDENTIFIER | CONST | '(' | NOT
+EXPRESSION_START = "IDENTIFIER | CONST | '(' | NOT | NULL | TRUE | FALSE"
+
+# CREATE TABLE 中列类型的合法取值
+COLUMN_TYPES = ("INT", "INTEGER", "FLOAT", "DOUBLE", "REAL",
+                "TEXT", "VARCHAR", "CHAR", "BOOL", "BOOLEAN")
+
+
+def describe_token(token):
+    """把记号渲染成可读文本；文件末尾的 EOF 显示为 <语句结束>。"""
+    if token.type == TT_EOF:
+        return "<语句结束>"
+    return repr(token.value)
+
 
 # ============================ AST 节点：表达式 ============================
 class Expr:
@@ -235,8 +254,8 @@ class Parser:
     def _expect_keyword(self, *words):
         token = self.current
         if not token.is_keyword(*words):
-            raise ParseError("期望关键字 %s，实际得到 %r"
-                             % (" / ".join(words), token.value),
+            raise ParseError("实际得到 %s，期望关键字 %s"
+                             % (describe_token(token), " / ".join(words)),
                              position=self._pos(token))
         return self._advance().value
 
@@ -248,7 +267,8 @@ class Parser:
     def _expect_punct(self, char):
         token = self.current
         if not token.is_punct(char):
-            raise ParseError("期望 %r，实际得到 %r" % (char, token.value),
+            raise ParseError("实际得到 %s，期望 %r"
+                             % (describe_token(token), char),
                              position=self._pos(token))
         return self._advance().value
 
@@ -260,7 +280,8 @@ class Parser:
     def _expect_identifier(self, what="标识符"):
         token = self.current
         if token.type != TT_IDENTIFIER:
-            raise ParseError("期望%s，实际得到 %r" % (what, token.value),
+            raise ParseError("实际得到 %s，期望%s"
+                             % (describe_token(token), what),
                              position=self._pos(token))
         return self._advance().value
 
@@ -270,7 +291,8 @@ class Parser:
         stmt = self._parse_statement()
         self._accept_punct(";")
         if self.current.type != TT_EOF:
-            raise ParseError("语句结束后存在多余内容：%r" % (self.current.value,),
+            raise ParseError("实际得到 %s，期望语句结束（分号或输入末尾）"
+                             % describe_token(self.current),
                              position=self._pos())
         return stmt
 
@@ -282,14 +304,17 @@ class Parser:
                 continue
             statements.append(self._parse_statement())
             if self.current.type != TT_EOF and not self._accept_punct(";"):
-                raise ParseError("语句之间需要用分号分隔", position=self._pos())
+                raise ParseError("实际得到 %s，期望语句之间用分号 ';' 分隔"
+                                 % describe_token(self.current),
+                                 position=self._pos())
         return statements
 
     # ---------------- 语句 ----------------
     def _parse_statement(self):
         token = self.current
         if token.type != TT_KEYWORD:
-            raise ParseError("语句必须以关键字开头，实际得到 %r" % (token.value,),
+            raise ParseError("实际得到 %s，期望语句关键字 %s"
+                             % (describe_token(token), " / ".join(STATEMENT_KEYWORDS)),
                              position=self._pos(token))
 
         keyword = token.value
@@ -312,7 +337,9 @@ class Parser:
         if keyword == "EXPLAIN":
             self._advance()
             return self._mark(ExplainStmt(self._parse_statement()), self._pos(token))
-        raise ParseError("不支持的语句：%s" % keyword, position=self._pos(token))
+        raise ParseError("实际得到 %s，期望语句关键字 %s"
+                         % (keyword, " / ".join(STATEMENT_KEYWORDS)),
+                         position=self._pos(token))
 
     def _parse_create_table(self):
         start = self.current
@@ -349,14 +376,18 @@ class Parser:
 
         name = self._expect_identifier("列名")
         if self.current.type != TT_KEYWORD or self.current.value not in self.TYPE_KEYWORDS:
-            raise ParseError("列 %s 缺少有效的类型声明" % name, position=self._pos())
+            raise ParseError("列 %s 缺少有效的类型声明：实际得到 %s，期望类型 %s"
+                             % (name, describe_token(self.current),
+                                " / ".join(COLUMN_TYPES)),
+                             position=self._pos())
         type_name = self._advance().value
 
         length = 0
         if self._accept_punct("("):
             value = self.current
             if value.type != TT_INT:
-                raise ParseError("类型长度必须为整数", position=self._pos(value))
+                raise ParseError("实际得到 %s，期望类型长度的整数值"
+                                 % describe_token(value), position=self._pos(value))
             self._advance()
             length = value.value
             self._expect_punct(")")
@@ -465,7 +496,8 @@ class Parser:
         if self._accept_keyword("LIMIT"):
             token = self.current
             if token.type != TT_INT:
-                raise ParseError("LIMIT 后必须跟整数", position=self._pos(token))
+                raise ParseError("实际得到 %s，期望 LIMIT 后跟整数"
+                                 % describe_token(token), position=self._pos(token))
             self._advance()
             limit = token.value
 
@@ -498,7 +530,8 @@ class Parser:
         while True:
             column = self._expect_identifier("列名")
             if not self.current.is_op("="):
-                raise ParseError("SET 子句中缺少 =", position=self._pos())
+                raise ParseError("实际得到 %s，期望 SET 子句中的 '='"
+                                 % describe_token(self.current), position=self._pos())
             self._advance()
             assignments.append((column, self._parse_expression()))
             if not self._accept_punct(","):
@@ -650,7 +683,9 @@ class Parser:
                 return self._mark(ColumnRef(column), self._pos(token))
             return self._mark(ColumnRef(token.value), self._pos(token))
 
-        raise ParseError("无法解析的记号 %r" % (token.value,), position=self._pos(token))
+        raise ParseError("实际得到 %s，期望 %s"
+                         % (describe_token(token), EXPRESSION_START),
+                         position=self._pos(token))
 
 
 def parse_sql(sql):

@@ -91,6 +91,7 @@ KEYWORDS = {
     "WHERE", "UPDATE", "SET", "DELETE", "SHOW", "TABLES", "DESC", "DESCRIBE",
     "EXPLAIN", "PRIMARY", "KEY", "NOT", "NULL", "AND", "OR", "IS", "IN",
     "LIKE", "ORDER", "BY", "ASC", "LIMIT", "IF", "EXISTS", "TRUE", "FALSE",
+    "AS",
     "INT", "INTEGER", "FLOAT", "DOUBLE", "REAL", "TEXT", "VARCHAR", "CHAR",
     "BOOL", "BOOLEAN",
 }

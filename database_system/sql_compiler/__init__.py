@@ -3,7 +3,7 @@
 
 from .ast import format_ast
 from .catalog import Catalog, Column, TableSchema
-from .errors import CompileError, LexError, ParseError, SemanticError
+from .errors import CompileError, LexError, ParseError, PlanError, SemanticError
 from .lexer import LexError, Token, format_tokens, tokenize
 from .optimizer import Optimizer
 from .parser import Parser, ParseError
@@ -20,7 +20,7 @@ __all__ = [
     # 语义分析
     "SemanticAnalyzer", "SemanticError",
     # 执行计划与优化
-    "Planner", "Optimizer",
+    "Planner", "Optimizer", "PlanError",
     # 错误基类
     "CompileError",
 ]

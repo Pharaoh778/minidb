@@ -2,6 +2,7 @@
 """执行计划生成器：把 AST 转换为逻辑执行计划（关系代数算子树）。"""
 
 from .catalog import Column, TableSchema
+from .errors import PlanError
 from .parser import (
     BinaryOp,
     ColumnRef,
@@ -230,7 +231,8 @@ class Planner:
             return self._plan_delete(statement)
         if isinstance(statement, ExplainStmt):
             return ExplainPlan(self.build(statement.statement))
-        raise ValueError("无法生成执行计划的语句：%r" % statement)
+        raise PlanError("无法生成执行计划的语句：%r" % (statement,),
+                        position=getattr(statement, "position", None))
 
     # ---------------- 各类语句 ----------------
     @staticmethod

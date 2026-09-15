@@ -59,3 +59,12 @@ class SemanticError(CompileError):
     """语义错误：表/列不存在、类型不匹配、列数不一致等。"""
 
     default_type = "语义错误"
+
+
+class PlanError(CompileError):
+    """计划生成错误：语句本身合法，但无法转换为执行计划。
+
+    对应指导书「遇到不支持的语法或缺失的语义信息时，应给出错误提示」。
+    """
+
+    default_type = "计划生成错误"

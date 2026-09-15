@@ -156,12 +156,28 @@ class SemanticAnalyzer:
                     "VALUES 第 %d 组值列数不匹配：期望 %d 列，实际 %d 列"
                     % (row_index, expected, len(row)), position=row_position)
 
-        # 类型检查 + 常量折叠（把字面量转换为列类型）
+        # 类型检查 + 常量折叠（把字面量转换为列类型）。
+        # 一次收集全部类型问题后统一报告——对照 PPT 第 28 页示例 2：
+        # "student.id expects INT, but VARCHAR found."
+        # "student.name expects VARCHAR, but INT found."
         target_columns = ([schema.get_column(c) for c in stmt.columns]
                           if stmt.columns else list(schema.columns))
+        problems = []
         for row in stmt.rows:
             for expr, column in zip(row, target_columns):
-                self._check_value_type(expr, column)
+                try:
+                    self._check_value_type(expr, column)
+                except SemanticError as exc:
+                    problems.append((position_of(expr), exc.reason))
+
+        if problems:
+            position = problems[0][0]
+            if len(problems) == 1:
+                raise SemanticError(problems[0][1], position=position)
+            raise SemanticError(
+                "共发现 %d 处类型错误：%s"
+                % (len(problems), "；".join(reason for _pos, reason in problems)),
+                position=position)
 
         # 未显式赋值且 NOT NULL 的列
         if stmt.columns:
@@ -299,7 +315,7 @@ class SemanticAnalyzer:
             return column.type if column else None
         if isinstance(expr, BinaryOp):
             if expr.op in ("+", "-", "*", "/", "%"):
-                return TYPE_FLOAT
+                return self._arithmetic_type(expr.op, expr.left, expr.right, schema)
             return TYPE_BOOL
         if isinstance(expr, UnaryOp):
             if expr.op == "NOT":
@@ -308,6 +324,25 @@ class SemanticAnalyzer:
         if isinstance(expr, (InExpr, LikeExpr, IsNullExpr)):
             return TYPE_BOOL
         return None
+
+    def _arithmetic_type(self, op, left, right, schema):
+        """算术运算的结果类型（对照 PPT 第 27 页的类型规则）。
+
+            INT  op INT   -> INT   （除法除外，结果为浮点）
+            任一为 FLOAT    -> FLOAT
+            操作数类型未知 -> None（无法推断）
+        """
+        left_type = self.infer_type(left, schema)
+        right_type = self.infer_type(right, schema)
+        if left_type is None or right_type is None:
+            return None
+        if op == "/":
+            return TYPE_FLOAT          # 与执行器一致：Python 整数除法得浮点
+        if left_type == TYPE_FLOAT or right_type == TYPE_FLOAT:
+            return TYPE_FLOAT
+        if left_type == TYPE_INT and right_type == TYPE_INT:
+            return TYPE_INT
+        return TYPE_FLOAT
 
     @staticmethod
     def _comparable(left, right):

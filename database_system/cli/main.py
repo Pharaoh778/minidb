@@ -17,6 +17,7 @@ if __package__ in (None, ""):
 from database_system.engine.executor import Executor, ExecutionError, Result  # noqa: E402
 from database_system.engine.storage_engine import StorageEngine, StorageError  # noqa: E402
 from database_system.sql_compiler.ast import format_ast  # noqa: E402
+from database_system.sql_compiler.errors import CompileError  # noqa: E402
 from database_system.sql_compiler.lexer import (  # noqa: E402
     LexError, format_tokens, tokenize,
 )
@@ -67,7 +68,8 @@ HELP_TEXT = """支持的操作：
 BUILTIN_EXIT = {".exit", ".quit", "exit", "quit", "\\q"}
 
 # 可预期、直接提示即可的错误
-KNOWN_ERRORS = (LexError, ParseError, SemanticError, ExecutionError, StorageError, OSError)
+# CompileError 覆盖词法/语法/语义/计划生成四类编译错误
+KNOWN_ERRORS = (CompileError, ExecutionError, StorageError, OSError)
 
 
 def report_error(exc, verbose=False):

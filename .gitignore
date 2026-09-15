@@ -16,7 +16,10 @@ env/
 .vscode/
 
 # ===== 运行时数据（程序自动生成，可随时重建） =====
-data/*.dat
+# 必须写 "data/" 而不是 "data/*.dat"：
+# 含中间斜杠的模式会被锚定到 .gitignore 所在目录，只匹配根目录下的 data/；
+# 只有尾部斜杠的 "data/" 才能匹配任意层级（如 database_system/cli/data/）。
+data/
 
 # ===== 课程资料（非本人成果、体积大，不入库） =====
 docs/
