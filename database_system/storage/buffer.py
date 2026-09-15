@@ -274,6 +274,10 @@ class BufferPool:
                 )
             return frame.page
 
+    # Compatibility name shared with FileManager's page interface.
+    def get_page(self, table, page_id):
+        return self.fetch_page(table, page_id)
+
     def pin_page(self, table, page_id):
         with self._lock:
             frame = self._frames.get(self._key(table, page_id))

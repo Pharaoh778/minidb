@@ -10,6 +10,8 @@ from itertools import chain
 from .catalog_manager import CatalogManager
 from ..storage.buffer import BufferPool
 from ..storage.file_manager import FileManager
+from ..storage.index import RecordIndex
+from ..storage.overflow import OverflowRef
 from ..utils.constants import (
     CATALOG_TABLE,
     DEFAULT_DATA_DIR,
@@ -17,6 +19,7 @@ from ..utils.constants import (
     DEFAULT_STRATEGY,
     LEN_PREFIX_SIZE,
     MAX_TEXT_LENGTH,
+    OVERFLOW_RECORD_MAGIC,
     PAGE_HEADER_SIZE,
     PAGE_SIZE,
     SLOT_SIZE,
@@ -28,6 +31,8 @@ from ..utils.constants import (
 from ..utils.helpers import ensure_dir, get_logger
 
 MAX_RECORD_SIZE = PAGE_SIZE - PAGE_HEADER_SIZE - SLOT_SIZE
+OVERFLOW_MARKER_FORMAT = "<4siii"
+OVERFLOW_MARKER_SIZE = struct.calcsize(OVERFLOW_MARKER_FORMAT)
 
 # 预编译的结构体 / 列长度：解码热路径上不再重复解析格式串
 _STRUCT_INT = struct.Struct("<i")
@@ -112,7 +117,7 @@ class RecordCodec:
     """
 
     @staticmethod
-    def encode(schema, values):
+    def encode(schema, values, allow_large=False):
         columns = schema.columns
         bitmap = bytearray((len(columns) + 7) // 8)
         body = bytearray()
@@ -130,8 +135,10 @@ class RecordCodec:
                 body += struct.pack("<?", bool(value))
             elif column.type == TYPE_TEXT:
                 raw = str(value).encode("utf-8")
-                if len(raw) > MAX_TEXT_LENGTH:
+                if len(raw) > MAX_TEXT_LENGTH and not allow_large:
                     raise StorageError("列 %s 的值超过 %d 字节上限" % (column.name, MAX_TEXT_LENGTH))
+                if len(raw) > 0xFFFF:
+                    raise StorageError("列 %s 的值超过编码长度上限" % column.name)
                 body += struct.pack("<H", len(raw)) + raw
             else:
                 raise StorageError("不支持的数据类型：%s" % column.type)
@@ -207,12 +214,97 @@ class StorageEngine:
                  strategy=DEFAULT_STRATEGY, logger=None):
         self.data_dir = ensure_dir(data_dir)
         self.logger = logger or get_logger("minidb.storage")
-        self.file_manager = FileManager(self.data_dir, self.logger)
+        self.file_manager = FileManager(self.data_dir, self.logger,
+                                        storage_log=True)
         self.buffer = BufferPool(self.file_manager, pool_size, strategy, self.logger)
         self.catalog = CatalogManager(self, self.logger)
         self._insert_hint = {}          # 表名 -> 上次成功插入的页号（插入位置提示）
-        self._key_index = {}            # 表名 -> {"column": 主键列名, "values": 主键值集合}
+        self.record_index = RecordIndex(unique=True)
         self.catalog.bootstrap()
+        self.rebuild_indexes()
+
+    @staticmethod
+    def _index_key(table, value):
+        return (str(table).lower(), value)
+
+    @staticmethod
+    def _overflow_marker(ref):
+        return struct.pack(OVERFLOW_MARKER_FORMAT, OVERFLOW_RECORD_MAGIC,
+                           int(ref.page_id), int(ref.length), int(ref.record_id))
+
+    @staticmethod
+    def _overflow_ref(data):
+        if not isinstance(data, (bytes, bytearray, memoryview)):
+            return None
+        data = bytes(data)
+        if len(data) != OVERFLOW_MARKER_SIZE or data[:4] != OVERFLOW_RECORD_MAGIC:
+            return None
+        _magic, page_id, length, record_id = struct.unpack(
+            OVERFLOW_MARKER_FORMAT, data
+        )
+        if page_id < 1 or length < 1 or record_id < 1:
+            raise StorageError("无效的溢出记录引用")
+        return OverflowRef(page_id, length, record_id)
+
+    def _encode_storage_record(self, table, schema, values, replace=None):
+        encoded = RecordCodec.encode(schema, values, allow_large=True)
+        if len(encoded) <= MAX_RECORD_SIZE:
+            return encoded, None
+        ref = self.file_manager.write_overflow(table, encoded, replace=replace)
+        return self._overflow_marker(ref), ref
+
+    def _resolve_storage_record(self, table, data):
+        ref = self._overflow_ref(data)
+        if ref is not None:
+            return self.file_manager.read_overflow(table, ref)
+        return data
+
+    def _decode_storage_record(self, table, schema, data):
+        return RecordCodec.decode(
+            schema, self._resolve_storage_record(table, data)
+        )
+
+    def rebuild_indexes(self):
+        """Rebuild primary-key locations from durable pages."""
+        index = RecordIndex(unique=True)
+        for table in [CATALOG_TABLE] + self.catalog.list_tables():
+            schema = self.get_schema(table)
+            if schema is None or schema.primary_key is None:
+                continue
+            key_name = schema.primary_key.name
+            for page_id in self.file_manager.data_page_ids(table):
+                page = self.file_manager.read_page(table, page_id)
+                for slot_id, raw in page.records():
+                    values = self._decode_storage_record(table, schema, raw)
+                    key = values.get(key_name)
+                    if key is not None:
+                        index.add(self._index_key(table, key), table, page_id, slot_id)
+        self.record_index = index
+        return len(index)
+
+    def indexed_lookup(self, table, key_value):
+        return self.record_index.locate(self._index_key(table, key_value))
+
+    def indexed_rows(self, table, key_value):
+        name = str(table).lower()
+        schema = self.get_schema(name)
+        if schema is None:
+            raise StorageError("表 %s 不存在" % name)
+        for location, raw in self.record_index.search_records(
+                self.file_manager, self._index_key(name, key_value)):
+            yield location, self._decode_storage_record(name, schema, raw)
+
+    def _remove_table_index(self, table):
+        name = str(table).lower()
+        for key, location in list(self.record_index.items()):
+            if location.table == name:
+                self.record_index.remove(key, location.table,
+                                         location.page_id, location.slot_id)
+
+    def _log_record(self, operation, table, page_id, slot_id, **details):
+        return self.file_manager._log(
+            operation, table=table, page_id=page_id, slot_id=slot_id, **details
+        )
 
     # ============================ 模式访问 ============================
     def get_schema(self, table):
@@ -242,7 +334,6 @@ class StorageEngine:
             self.file_manager.drop_file(schema.name)
             raise
         self._insert_hint.pop(schema.name, None)
-        self._key_index.pop(schema.name, None)
         return schema
 
     def drop_table(self, table):
@@ -256,8 +347,8 @@ class StorageEngine:
         self.buffer.discard_table(name)
         self.catalog.drop_table(name)
         self.file_manager.drop_file(name)
+        self._remove_table_index(name)
         self._insert_hint.pop(name, None)
-        self._key_index.pop(name, None)
         return name
 
     # ============================ 文件（供系统目录引导使用）============================
@@ -268,12 +359,12 @@ class StorageEngine:
     def rewrite_catalog(self, schema, rows):
         """整体重写系统表。"""
         name = schema.name
+        self._remove_table_index(name)
         self.buffer.discard_table(name)          # 丢弃旧页，避免读到被删除文件的缓存
         if self.file_manager.table_exists(name):
             self.file_manager.drop_file(name)
         self.file_manager.create_file(name)
         self._insert_hint.pop(name, None)
-        self._key_index.pop(name, None)
         for row in rows:
             self.insert_row(name, row)
 
@@ -294,18 +385,29 @@ class StorageEngine:
             key_value = row_values.get(primary_key.name)
             if key_value is None:
                 raise StorageError("主键列 %s 不允许为 NULL" % primary_key.name)
-            key_values = self._key_values(name, primary_key.name)
-            if key_value in key_values:
+            if self._primary_key_exists(schema, primary_key.name, key_value):
                 raise DuplicateKeyError("主键冲突：%s = %r 已存在" % (primary_key.name, key_value))
 
-        data = RecordCodec.encode(schema, row_values)
-        if len(data) > MAX_RECORD_SIZE:
-            raise StorageError("记录过大（%d 字节），超过单页可容纳上限 %d 字节"
-                               % (len(data), MAX_RECORD_SIZE))
-
-        page_id, slot_id = self._write_record(name, data)
+        data, overflow_ref = self._encode_storage_record(name, schema, row_values)
+        try:
+            page_id, slot_id = self._write_record(name, data)
+        except Exception:
+            if overflow_ref is not None:
+                self.file_manager.free_overflow(name, overflow_ref)
+            raise
         if primary_key is not None:
-            key_values.add(key_value)
+            try:
+                self.record_index.add(self._index_key(name, key_value),
+                                      name, page_id, slot_id)
+            except Exception:
+                page = self.buffer.fetch_page(name, page_id)
+                removed = page.delete_record(slot_id)
+                self.buffer.unpin_page(name, page_id, dirty=removed)
+                if overflow_ref is not None:
+                    self.file_manager.free_overflow(name, overflow_ref)
+                raise
+        self._log_record("RECORD_INSERT", name, page_id, slot_id,
+                         overflow=overflow_ref is not None)
         return (page_id, slot_id)
 
     @staticmethod
@@ -340,34 +442,10 @@ class StorageEngine:
         self._insert_hint[table] = page_id
         return page_id, slot_id
 
-    # ============================ 主键索引 ============================
-    def _key_values(self, name, key_column):
-        """取表的主键值集合；不存在则扫一遍主键列惰性构建。
-
-        主键唯一性检查原先每插入一行都要全表扫描一遍，批量插入因此退化成
-        O(n^2)。这里用内存哈希集合把查找降到 O(1)，插入/更新/删除时增量维护；
-        索引只是缓存，任何时候丢掉它都只会退回全表扫描。
-        """
-        entry = self._key_index.get(name)
-        if entry is not None and entry["column"] == key_column:
-            return entry["values"]
-        values = set()
-        if self.file_manager.table_exists(name):
-            for _rid, row in self.scan_table(name, [key_column]):
-                value = row.get(key_column)
-                if value is not None:
-                    values.add(value)
-        self._key_index[name] = {"column": key_column, "values": values}
-        return values
-
-    def _key_index_entry(self, name, key_column):
-        entry = self._key_index.get(name)
-        if entry is not None and entry["column"] == key_column:
-            return entry
-        return None
-
     def _primary_key_exists(self, schema, key_name, key_value):
-        return key_value in self._key_values(schema.name, key_name)
+        return bool(self.record_index.search(
+            self._index_key(schema.name, key_value)
+        ))
 
     def scan_table(self, table, columns=None):
         """全表扫描，逐行产出 (rid, values)。
@@ -399,6 +477,7 @@ class StorageEngine:
             page = self.buffer.fetch_page(name, page_id)
             try:
                 for slot_id, data in list(page.records()):
+                    data = self._resolve_storage_record(name, data)
                     yield (page_id, slot_id), decode(plan, data, bitmap_size)
             finally:
                 self.buffer.unpin_page(name, page_id)
@@ -417,48 +496,78 @@ class StorageEngine:
             self.buffer.unpin_page(name, page_id)
             raise StorageError("记录不存在：%s 页=%d 槽=%d" % (name, page_id, slot_id))
 
-        old_row = RecordCodec.decode(schema, old_data)
+        old_overflow = self._overflow_ref(old_data)
+        old_row = self._decode_storage_record(name, schema, old_data)
         primary_key = schema.primary_key
-        entry = self._key_index_entry(name, primary_key.name) if primary_key else None
-        old_key = old_row.get(primary_key.name) if entry is not None else None
+        old_key = old_row.get(primary_key.name) if primary_key else None
 
         merged = old_row
         merged.update({str(k).lower(): v for k, v in new_values.items()})
-        new_key = merged.get(primary_key.name) if entry is not None else None
-        data = RecordCodec.encode(schema, merged)
+        new_key = merged.get(primary_key.name) if primary_key else None
+        if primary_key is not None:
+            if new_key is None:
+                self.buffer.unpin_page(name, page_id)
+                raise StorageError("主键列 %s 不允许为 NULL" % primary_key.name)
+            if new_key != old_key and self._primary_key_exists(
+                    schema, primary_key.name, new_key):
+                self.buffer.unpin_page(name, page_id)
+                raise DuplicateKeyError("主键冲突：%s = %r 已存在" %
+                                        (primary_key.name, new_key))
 
-        if entry is not None:
-            # 旧主键值先摘掉：写回成功再补新值（迁移分支由 insert_row 负责补）
-            entry["values"].discard(old_key)
+        data, new_overflow = self._encode_storage_record(
+            name, schema, merged, replace=old_overflow
+        )
 
         if page.update_record(slot_id, data):
             self.buffer.unpin_page(name, page_id, dirty=True)
-            if entry is not None:
-                entry["values"].add(new_key)
+            if old_overflow is not None and new_overflow is None:
+                self.file_manager.free_overflow(name, old_overflow)
+            if primary_key is not None and new_key != old_key:
+                self.record_index.remove(self._index_key(name, old_key),
+                                         name, page_id, slot_id)
+                self.record_index.add(self._index_key(name, new_key),
+                                      name, page_id, slot_id)
+            self._log_record("RECORD_UPDATE", name, page_id, slot_id,
+                             overflow=new_overflow is not None)
             return (page_id, slot_id)
 
         page.delete_record(slot_id)
         self.buffer.unpin_page(name, page_id, dirty=True)
-        return self.insert_row(name, merged)
+        if primary_key is not None:
+            self.record_index.remove(self._index_key(name, old_key),
+                                     name, page_id, slot_id)
+        if old_overflow is not None and new_overflow is None:
+            self.file_manager.free_overflow(name, old_overflow)
+        if new_overflow is not None:
+            self.file_manager.free_overflow(name, new_overflow)
+        new_rid = self.insert_row(name, merged)
+        self._log_record("RECORD_UPDATE", name, new_rid[0], new_rid[1],
+                         moved=True)
+        return new_rid
 
     def delete_row(self, table, rid):
         """删除一行。"""
         name = str(table).lower()
         page_id, slot_id = rid
         page = self.buffer.fetch_page(name, page_id)
-        entry = self._key_index.get(name)
-        old_key = None
-        if entry is not None:
-            # 删除前先取出主键值，行失效后同步从索引摘掉，避免残留造成假冲突
-            old_data = page.get_record(slot_id)
-            if old_data is not None:
-                schema = self.get_schema(name)
-                if schema is not None:
-                    old_key = RecordCodec.decode(schema, old_data).get(entry["column"])
+        old_data = page.get_record(slot_id)
+        old_overflow = self._overflow_ref(old_data)
         removed = page.delete_record(slot_id)
         self.buffer.unpin_page(name, page_id, dirty=removed)
-        if removed and entry is not None:
-            entry["values"].discard(old_key)
+        if removed:
+            schema = self.get_schema(name)
+            values = None
+            if schema is not None and schema.primary_key is not None:
+                values = self._decode_storage_record(name, schema, old_data)
+            if old_overflow is not None:
+                self.file_manager.free_overflow(name, old_overflow)
+            if values is not None:
+                self.record_index.remove(
+                    self._index_key(name, values.get(schema.primary_key.name)),
+                    name, page_id, slot_id,
+                )
+            self._log_record("RECORD_DELETE", name, page_id, slot_id,
+                             overflow=old_overflow is not None)
         return bool(removed)
 
     def row_count(self, table):
@@ -484,7 +593,9 @@ class StorageEngine:
     # ============================ 运行时 ============================
     def flush(self):
         """把所有脏页刷回磁盘。"""
-        return self.buffer.flush_all()
+        count = self.buffer.flush_all()
+        self.file_manager.flush_storage_log()
+        return count
 
     def stats(self):
         return self.buffer.stats()
@@ -493,7 +604,8 @@ class StorageEngine:
         return self.buffer.log_stats()
 
     def close(self):
-        self.flush()
+        self.buffer.close()
+        self.file_manager.close(durable_log=True)
 
     def __repr__(self):
         return "StorageEngine(dir=%s, tables=%d)" % (self.data_dir, len(self.catalog))

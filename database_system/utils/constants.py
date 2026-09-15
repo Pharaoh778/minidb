@@ -35,6 +35,7 @@ OVERFLOW_FLAGS_OFFSET = 10
 OVERFLOW_RECORD_ID_OFFSET = 12
 OVERFLOW_PAGE_HEADER_SIZE = 20
 OVERFLOW_RECORD_FLAG = 1
+OVERFLOW_RECORD_MAGIC = b"MDBR"
 
 # ============================ 数据类型 ============================
 TYPE_INT = "INT"

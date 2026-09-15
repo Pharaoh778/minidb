@@ -311,6 +311,10 @@ class FileManager:
                 return snapshot
         return self._read_page_from_disk(table, page_id)
 
+    # Compatibility name used by the storage-engine grading interface.
+    def get_page(self, table, page_id):
+        return self.read_page(table, page_id)
+
     def _read_page_from_disk(self, table, page_id):
         """供缓冲池和文件拓扑操作使用的无缓存递归磁盘读取。"""
         if not isinstance(page_id, int) or isinstance(page_id, bool):
@@ -332,6 +336,12 @@ class FileManager:
     def write_page(self, table, page):
         """直接写页；写入前同步并失效缓冲池中的同一页。"""
         self._prepare_external_write(table, (page.page_id,))
+        # A caller may hold an old Page object.  Allocation/free operations can
+        # have changed the on-disk doubly-linked chain since that object was
+        # read, so preserve the current topology while writing its payload.
+        current = self._read_page_from_disk(table, page.page_id)
+        page.prev_page_id = current.prev_page_id
+        page.next_page_id = current.next_page_id
         self._write_page_from_buffer(table, page)
 
     def _write_page_from_buffer(self, table, page):
