@@ -7,6 +7,7 @@ import re
 
 from .constants import (
     MAX_TEXT_LENGTH,
+    PROJECT_ROOT,
     TYPE_BOOL,
     TYPE_FLOAT,
     TYPE_INT,
@@ -20,6 +21,19 @@ def ensure_dir(path):
     """确保目录存在。"""
     os.makedirs(path, exist_ok=True)
     return path
+
+
+def resolve_data_dir(data_dir):
+    """把数据目录解析为绝对路径。
+
+    相对路径锚定到项目根目录而非当前工作目录：否则在 database_system/cli
+    这类子目录下启动时会静默使用一个同名但完全不同的库。绝对路径（尤其是
+    测试使用的临时目录）原样返回。
+    """
+    path = os.fspath(data_dir)
+    if os.path.isabs(path):
+        return path
+    return os.path.join(PROJECT_ROOT, path)
 
 
 def get_logger(name="minidb", level=logging.INFO):

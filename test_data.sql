@@ -4,10 +4,15 @@
 -- 用途：为 DDL / INSERT / SELECT / UPDATE / DELETE 等功能的手工
 --       测试与答辩演示，提供一套统一、可重复执行的基线数据。
 --
--- 执行方式（必须在项目根目录下）：
+-- 执行方式（推荐：一键运行，会自动校验各表行数）
+--   run_test_data.bat                      -- Windows 双击即可
+--   python run_test_data.py                -- 跨平台，数据写入 data/
+--   python run_test_data.py --clean        -- 先清空数据目录，彻底重来
+--   python run_test_data.py -d demo_data -s FIFO -p 8
+--
+-- 等价的底层命令（需在项目根目录下）：
 --   python -m database_system.cli.main -f test_data.sql
 --   python -m database_system.cli.main -f test_data.sql -d data
---   python -m database_system.cli.main -f test_data.sql -d data -s FIFO -p 8
 --
 -- 脚本以 DROP TABLE IF EXISTS 开头，可反复执行，每次重置为初始数据。
 -- 启用统计：进入 REPL 后输入 .stats，可观察缓冲池命中率随查询变化。

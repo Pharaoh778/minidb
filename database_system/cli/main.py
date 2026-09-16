@@ -279,7 +279,8 @@ def build_arg_parser():
         description="MiniDB —— 简化版数据库管理系统（课程实习项目）",
     )
     parser.add_argument("-d", "--data-dir", default=DEFAULT_DATA_DIR,
-                        help="数据目录（默认 %s）" % DEFAULT_DATA_DIR)
+                        help="数据目录（默认 %s；相对路径锚定项目根目录，"
+                             "绝对路径按原样使用）" % DEFAULT_DATA_DIR)
     parser.add_argument("-p", "--pool-size", type=int, default=DEFAULT_POOL_SIZE,
                         help="缓冲池页数（默认 %d）" % DEFAULT_POOL_SIZE)
     parser.add_argument("-s", "--strategy", default=DEFAULT_STRATEGY,
@@ -301,6 +302,10 @@ def main(argv=None):
     db = MiniDB(data_dir=args.data_dir, pool_size=args.pool_size,
                 strategy=args.strategy, logger=logger, verbose=args.verbose,
                 optimize=not args.no_optimize)
+
+    if args.file or args.execute:
+        # 非交互模式也报告库的位置，避免换目录运行时查错库却不自知
+        print("数据目录：%s" % os.path.abspath(db.engine.data_dir))
 
     orphans = db.engine.orphan_files()
     if orphans:

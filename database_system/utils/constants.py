@@ -1,6 +1,14 @@
 # -*- coding: utf-8 -*-
 """全局常量定义。"""
 
+import os
+
+# 项目根目录（本文件位于 <root>/database_system/utils/constants.py，故向上三级）。
+# 相对路径的数据目录一律锚定到这里，而不是当前工作目录，避免从不同目录
+# 启动时静默切换到另一个库。
+PROJECT_ROOT = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 # ============================ 存储相关 ============================
 PAGE_SIZE = 4096          # 页大小（磁盘 I/O 的最小单位）
 PAGE_HEADER_SIZE = 20     # 页头大小

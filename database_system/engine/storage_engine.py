@@ -28,7 +28,7 @@ from ..utils.constants import (
     TYPE_INT,
     TYPE_TEXT,
 )
-from ..utils.helpers import ensure_dir, get_logger
+from ..utils.helpers import ensure_dir, get_logger, resolve_data_dir
 
 MAX_RECORD_SIZE = PAGE_SIZE - PAGE_HEADER_SIZE - SLOT_SIZE
 OVERFLOW_MARKER_FORMAT = "<4siii"
@@ -212,7 +212,8 @@ class StorageEngine:
 
     def __init__(self, data_dir=DEFAULT_DATA_DIR, pool_size=DEFAULT_POOL_SIZE,
                  strategy=DEFAULT_STRATEGY, logger=None):
-        self.data_dir = ensure_dir(data_dir)
+        # 相对路径锚定项目根，保证无论从哪个工作目录启动都指向同一个库
+        self.data_dir = ensure_dir(resolve_data_dir(data_dir))
         self.logger = logger or get_logger("minidb.storage")
         self.file_manager = FileManager(self.data_dir, self.logger,
                                         storage_log=True)
